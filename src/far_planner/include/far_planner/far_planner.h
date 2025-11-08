@@ -10,6 +10,8 @@
 #include "planner_visualizer.h"
 #include "scan_handler.h"
 #include "graph_msger.h"
+#include <gcopter/sfc_gen.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 
 struct FARMasterParams {
@@ -66,6 +68,8 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scan_grid_debug_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr new_PCL_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr terrain_height_pub_;
+    // 可视化
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr sfc_vis_pub_;
 
 
     rclcpp::TimerBase::SharedPtr planning_event_;
@@ -103,6 +107,9 @@ private:
 
     CTNodeStack new_ctnodes_;
     std::vector<PointStack> realworld_contour_;
+    // 安全走廊
+    std::vector<Eigen::MatrixX4d> sfc_corridors_;
+    
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -143,6 +150,11 @@ private:
     Point3D ExtendViewpointOnObsCloud(const NavNodePtr& nav_node_ptr, const PointCloudPtr& obsCloudIn, float& free_dist);
 
     Point3D ProjectNavWaypoint(const NavNodePtr& nav_node_ptr, const NavNodePtr& last_point_ptr);
+
+
+    // ========== 安全走廊生成与可视化 ==========
+    void PublishSFCCorridor(const std::vector<Eigen::MatrixX4d>& polys);
+    std::vector<Eigen::Vector3d> PathToEigen(const NodePtrStack& far_path) const;
 
         // Callback Functions
     void OdomCallBack(const nav_msgs::msg::Odometry::SharedPtr msg);

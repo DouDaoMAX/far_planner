@@ -33,6 +33,7 @@ void FARMaster::Init() {
   update_command_sub_ = nh_->create_subscription<std_msgs::msg::Bool>("/update_visibility_graph", 5, std::bind(&FARMaster::UpdateCommandCallBack, this, std::placeholders::_1));
   goal_pub_           = nh_->create_publisher<geometry_msgs::msg::PointStamped>("/way_point",5);
   boundary_pub_       = nh_->create_publisher<geometry_msgs::msg::PolygonStamped>("/navigation_boundary",5);
+  
 
   // Timers
   runtime_pub_        = nh_->create_publisher<std_msgs::msg::Float32>("/runtime",1);
@@ -53,6 +54,8 @@ void FARMaster::Init() {
   scan_grid_debug_     = nh_->create_publisher<sensor_msgs::msg::PointCloud2>("/FAR_scanGrid_debug",1);
   new_PCL_pub_         = nh_->create_publisher<sensor_msgs::msg::PointCloud2>("/FAR_new_debug",1);
   terrain_height_pub_  = nh_->create_publisher<sensor_msgs::msg::PointCloud2>("/FAR_terrain_height_debug",1);
+  //安全走廊
+  sfc_vis_pub_ = nh_->create_publisher<visualization_msgs::msg::MarkerArray>("/sfc_corridor", 1);
 
   //print publisher and subscriber init complete
   // RCLCPP_INFO(nh_->get_logger(), "FAR Planner Subscriber and Publisher Initiated");
@@ -138,6 +141,48 @@ void FARMaster::Init() {
   // init complete
   is_init_completed_ = true;
   RCLCPP_INFO(nh_->get_logger(), "FAR Planner Initiated Complete");
+}
+
+std::vector<Eigen::Vector3d> FARMaster::PathToEigen(const NodePtrStack& far_path) const
+{
+    std::vector<Eigen::Vector3d> eigen_path;
+    eigen_path.reserve(far_path.size());
+    for (const auto& node : far_path) {
+        eigen_path.emplace_back(node->position.x,
+                                node->position.y,
+                                node->position.z);
+    }
+    return eigen_path;
+}
+
+void FARMaster::PublishSFCCorridor(const std::vector<Eigen::MatrixX4d>& polys)
+{
+    visualization_msgs::msg::MarkerArray ma;
+    int id = 0;
+    for (const auto& poly : polys) {
+        visualization_msgs::msg::Marker m;
+        m.header.frame_id = master_params_.world_frame;
+        m.header.stamp    = nh_->now();
+        m.ns              = "sfc";
+        m.id              = id++;
+        m.type            = visualization_msgs::msg::Marker::CUBE_LIST;
+        m.action          = visualization_msgs::msg::Marker::ADD;
+        m.pose.orientation.w = 1.0;
+        m.scale.x = m.scale.y = m.scale.z = 0.05;
+        m.color.r = 0.5; m.color.g = 0.0; m.color.b = 1.0; m.color.a = 0.3;
+
+        for (int r = 0; r < poly.rows(); ++r) {
+            const auto& plane = poly.row(r);
+            Eigen::Vector3d n(plane[0], plane[1], plane[2]);
+            double d = plane[3] / n.norm();
+            Eigen::Vector3d center = -d * n.normalized();
+            geometry_msgs::msg::Point p;
+            p.x = center.x(); p.y = center.y(); p.z = center.z();
+            m.points.push_back(p);
+        }
+        ma.markers.push_back(m);
+    }
+    sfc_vis_pub_->publish(ma);
 }
 
 void FARMaster::ResetEnvironmentAndGraph() {
@@ -322,6 +367,34 @@ void FARMaster::PlanningCallBack() {
       planner_viz_.VizPoint3D(waypoint, "waypoint", VizColor::MAGNA, 1.5);
       planner_viz_.VizPoint3D(current_free_goal, "free_goal", VizColor::GREEN, 1.5);
       planner_viz_.VizPath(global_path, is_current_free_nav);
+      /* ---------- 1. 把 FAR 路径转成 Eigen 向量 ---------- */
+      std::vector<Eigen::Vector3d> rough_path = PathToEigen(global_path);
+      if (rough_path.size() < 2) {
+          // 路径太短，跳过走廊生成
+      } else {
+          // 原有 convexCover 代码全部放这里
+          std::vector<Eigen::Vector3d> obstacle_points;
+          if (temp_obs_ptr_ && !temp_obs_ptr_->empty()) {
+              for (const auto& pt : temp_obs_ptr_->points) {
+                  obstacle_points.emplace_back(pt.x, pt.y, pt.z);
+              }
+          }
+
+          std::vector<Eigen::MatrixX4d> corridors;
+          sfc_gen::convexCover(
+              rough_path,
+              obstacle_points,
+              Eigen::Vector3d(-master_params_.sensor_range, -master_params_.sensor_range, -10.0),
+              Eigen::Vector3d( master_params_.sensor_range,  master_params_.sensor_range,  10.0),
+              1.0,
+              master_params_.robot_dim + 0.2,
+              corridors
+          );
+          sfc_gen::shortCut(corridors);
+
+          sfc_corridors_ = std::move(corridors);
+          PublishSFCCorridor(sfc_corridors_);
+      }
     } else if (is_planner_running_) { // stop robot
       global_path.clear();
       planner_viz_.VizPath(global_path);

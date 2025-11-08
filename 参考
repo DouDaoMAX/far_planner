@@ -1,0 +1,22 @@
+# 进入临时目录
+cd ~
+mkdir -p temp_clipper && cd temp_clipper
+
+# 下载 Clipper2（推荐，比 Clipper1 更快）
+git clone https://github.com/AngusJohnson/Clipper2.git
+
+# 进入目录
+cd Clipper2/CPP
+
+# 创建 CMake 构建目录
+mkdir build && cd build
+
+# 配置（使用系统路径）
+cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local
+
+# 编译 + 安装
+sudo make install -j$(nproc)
+
+# 清理
+cd ~
+rm -rf temp_clipper
